@@ -1,83 +1,92 @@
-#include <Arduino.h>
-#include <WiFiManager.h>
-#include "HX711.h"
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <PubSubClient.h>
 
-// HX711 circuit wiring
-const int LOADCELL_DOUT_PIN = 12; // Changed to GPIO 12
-const int LOADCELL_SCK_PIN = 14; // Changed to GPIO 14
+/* WiFi credentials */
+const char* WIFI_SSID = "Ali-Galaxy";
+const char* WIFI_PASS = "3fsr8697s2sqnhi";
 
-HX711 scale;
+/* MQTT credentials */
+const char* MQTT_HOST = "p9869662.ala.asia-southeast1.emqxsl.com";
+const int   MQTT_PORT = 8883;
+const char* MQTT_USER = "user1";
+const char* MQTT_PASS = "Pass1234";
+
+/* MQTT topic */
+const char* MQTT_TOPIC = "test/topic";
+
+/* Root CA certificate (emqxsl-ca.crt) */
+const char* ROOT_CA = R"EOF(
+-----BEGIN CERTIFICATE-----
+MIIDjjCCAnagAwIBAgIQAzrx5qcRqaC7KGSxHQn65TANBgkqhkiG9w0BAQsFADBh
+MQswCQYDVQQGEwJVUzEVMBMGA1UEChMMRGlnaUNlcnQgSW5jMRkwFwYDVQQLExB3
+d3cuZGlnaWNlcnQuY29tMSAwHgYDVQQDExdEaWdpQ2VydCBHbG9iYWwgUm9vdCBH
+MjAeFw0xMzA4MDExMjAwMDBaFw0zODAxMTUxMjAwMDBaMGExCzAJBgNVBAYTAlVT
+MRUwEwYDVQQKEwxEaWdpQ2VydCBJbmMxGTAXBgNVBAsTEHd3dy5kaWdpY2VydC5j
+b20xIDAeBgNVBAMTF0RpZ2lDZXJ0IEdsb2JhbCBSb290IEcyMIIBIjANBgkqhkiG
+9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuzfNNNx7a8myaJCtSnX/RrohCgiN9RlUyfuI
+2/Ou8jqJkTx65qsGGmvPrC3oXgkkRLpimn7Wo6h+4FR1IAWsULecYxpsMNzaHxmx
+1x7e/dfgy5SDN67sH0NO3Xss0r0upS/kqbitOtSZpLYl6ZtrAGCSYP9PIUkY92eQ
+q2EGnI/yuum06ZIya7XzV+hdG82MHauVBJVJ8zUtluNJbd134/tJS7SsVQepj5Wz
+tCO7TG1F8PapspUwtP1MVYwnSlcUfIKdzXOS0xZKBgyMUNGPHgm+F6HmIcr9g+UQ
+vIOlCsRnKPZzFBQ9RnbDhxSJITRNrw9FDKZJobq7nMWxM4MphQIDAQABo0IwQDAP
+BgNVHRMBAf8EBTADAQH/MA4GA1UdDwEB/wQEAwIBhjAdBgNVHQ4EFgQUTiJUIBiV
+5uNu5g/6+rkS7QYXjzkwDQYJKoZIhvcNAQELBQADggEBAGBnKJRvDkhj6zHd6mcY
+1Yl9PMWLSn/pvtsrF9+wX3N3KjITOYFnQoQj8kVnNeyIv/iPsGEMNKSuIEyExtv4
+NeF22d+mQrvHRAiGfzZ0JFrabA0UWTW98kndth/Jsw1HKj2ZL7tcu7XUIOGZX1NG
+Fdtom/DzMNU+MeKNhJ7jitralj41E6Vf8PlwUHBHQRFXGU7Aj64GxJUTFy8bJZ91
+8rGOmaFvE7FBcf6IKshPECBV1/MUReXgRPTqh5Uykw7+U0b6LJ3/iyK5S9kJRaTe
+pLiaWN0bfVKfjllDiIGknibVb63dDcY3fe0Dkhvld1927jyNxF1WW6LZZm6zNTfl
+MrY=
+-----END CERTIFICATE-----
+)EOF";
+
+WiFiClientSecure secureClient;
+PubSubClient mqttClient(secureClient);
+
+void connectWiFi() {
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  Serial.print("Connecting to WiFi");
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("\nWiFi connected");
+}
+
+void connectMQTT() {
+  while (!mqttClient.connected()) {
+    Serial.print("Connecting to MQTT... ");
+
+    if (mqttClient.connect("ESP32Client", MQTT_USER, MQTT_PASS)) {
+      Serial.println("connected");
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(mqttClient.state());
+      Serial.println(" retrying in 5s");
+      delay(5000);
+    }
+  }
+}
 
 void setup() {
-    Serial.begin(115200);
-    delay(1000);
+  Serial.begin(115200);
 
-    WiFiManager wm;
+  connectWiFi();
 
-    // Only for test
-    wm.resetSettings();
+  secureClient.setCACert(ROOT_CA);   // 🔐 TLS trust
 
-    Serial.println("Starting WiFiManager...");
+  mqttClient.setServer(MQTT_HOST, MQTT_PORT);
 
-    bool res = wm.autoConnect("ESP32-Setup", "12345678");
+  connectMQTT();
 
-    if (!res) {
-        Serial.println("Failed to connect.");
-        // Retry or sleep, depending on your device logic
-        ESP.restart();
-    }
-
-    Serial.println("Connected!");
-    Serial.print("IP Address: ");
-    Serial.println(WiFi.localIP());
-
-    Serial.println("=====================================");
-    Serial.println("HX711 Load Cell Test");
-    Serial.println("ESP32 Pins: DT=GPIO12, SCK=GPIO14");
-    Serial.println("=====================================");
-    delay(2000);
-
-    Serial.println("Initializing the scale...");
-
-    scale.begin(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN);
-
-    // Give some time for stabilization
-    delay(2000);
-
-    Serial.println("Testing basic readings:");
-    Serial.print("Raw read: ");
-    Serial.println(scale.read());
-
-    Serial.print("10x average: ");
-    Serial.println(scale.read_average(10));
-
-    // Initialize scale
-    scale.set_scale(1.0); // Temporary calibration factor
-    scale.tare(); // Reset to zero
-
-    Serial.println("Scale initialized and tared (set to zero)");
-    Serial.println("Starting continuous readings...");
-    Serial.println("Raw\t|\tAverage\t|\tUnits");
-    Serial.println("----------------------------------------");
+  // Publish once (same as mosquitto_pub)
+  mqttClient.publish(MQTT_TOPIC, "hello mqtt over tls");
+  Serial.println("Message published");
 }
 
 void loop() {
-    // Read and display values
-    long raw = scale.read();
-    float average = scale.read_average(5);
-    float units = scale.get_units(5);
-
-    Serial.print(raw);
-    Serial.print("\t|\t");
-    Serial.print(average, 0); // 0 decimal places
-    Serial.print("\t|\t");
-    Serial.print(units, 2); // 2 decimal places
-    Serial.println(" units");
-
-    // Blink built-in LED to show it's working (if available)
-    static bool ledState = false;
-    digitalWrite(2, ledState ? HIGH : LOW); // GPIO 2 often has built-in LED
-    ledState = !ledState;
-
-    delay(500); // Read twice per second
+  mqttClient.loop();
 }
