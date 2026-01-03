@@ -1,0 +1,18 @@
+mosquitto_pub \
+  -h p9869662.ala.asia-southeast1.emqxsl.com \
+  -p 8883 \
+  --cafile ~/mqtt-test/emqxsl-ca.crt \
+  -u "user1" \
+  -P "Pass1234" \
+  -t test/topic \
+  -m "hello mqtt over tls"
+
+
+mosquitto_sub \
+  -h p9869662.ala.asia-southeast1.emqxsl.com \
+  -p 8883 \
+  --cafile ~/mqtt-test/emqxsl-ca.crt \
+  -u "user1" \
+  -P "Pass1234" \
+  -t test/topic \
+  -v

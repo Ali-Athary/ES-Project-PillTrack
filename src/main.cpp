@@ -1,22 +1,20 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
+#include <WiFiManager.h>
 #include <PubSubClient.h>
-
-/* WiFi credentials */
-const char* WIFI_SSID = "Ali-Galaxy";
-const char* WIFI_PASS = "3fsr8697s2sqnhi";
+#include "HX711.h"
 
 /* MQTT credentials */
-const char* MQTT_HOST = "p9869662.ala.asia-southeast1.emqxsl.com";
-const int   MQTT_PORT = 8883;
-const char* MQTT_USER = "user1";
-const char* MQTT_PASS = "Pass1234";
+const char *MQTT_HOST = "p9869662.ala.asia-southeast1.emqxsl.com";
+constexpr int MQTT_PORT = 8883;
+const char *MQTT_USER = "user1";
+const char *MQTT_PASS = "Pass1234";
 
 /* MQTT topic */
-const char* MQTT_TOPIC = "test/topic";
+const char *MQTT_TOPIC = "test/topic";
 
-/* Root CA certificate (emqxsl-ca.crt) */
-const char* ROOT_CA = R"EOF(
+/* Root CA certificate */
+const char *ROOT_CA = R"EOF(
 -----BEGIN CERTIFICATE-----
 MIIDjjCCAnagAwIBAgIQAzrx5qcRqaC7KGSxHQn65TANBgkqhkiG9w0BAQsFADBh
 MQswCQYDVQQGEwJVUzEVMBMGA1UEChMMRGlnaUNlcnQgSW5jMRkwFwYDVQQLExB3
@@ -41,52 +39,151 @@ MrY=
 -----END CERTIFICATE-----
 )EOF";
 
+/* Heartbeat time */
+unsigned long lastHeartbeatTime = 0;
+constexpr unsigned long HEARTBEAT_INTERVAL = 10000;
+
+/* Platforms */
+typedef enum {
+    DISABLE,
+    IDLE,
+    EMPTY
+} PlatformState;
+
+PlatformState p_states[2];
+HX711 scales[2];
+
+constexpr int LOADCELL_1_DOUT_PIN = 12;
+constexpr int LOADCELL_1_SCK_PIN = 14;
+
+constexpr int LOADCELL_2_DOUT_PIN = 27;
+constexpr int LOADCELL_2_SCK_PIN = 26;
+
+unsigned long emptyStartTime[2];
+unsigned long lastEmptyWarnTime[2];
+constexpr unsigned long EMPTY_WARN_TIME_THRESHOLD = 20;
+constexpr unsigned long EMPTY_TIME_MAX = 100;
+
+constexpr float WEIGHT_THRESHOLD = 50.0;
+constexpr unsigned long READ_INTERVALS = 100;
+
 WiFiClientSecure secureClient;
 PubSubClient mqttClient(secureClient);
 
-void connectWiFi() {
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-  Serial.print("Connecting to WiFi");
+void connectMQTT() {
+    while (!mqttClient.connected()) {
+        Serial.print("Connecting to MQTT... ");
 
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-
-  Serial.println("\nWiFi connected");
+        if (mqttClient.connect("ESP32Client", MQTT_USER, MQTT_PASS)) {
+            Serial.println("connected");
+        } else {
+            Serial.print("failed, rc=");
+            Serial.print(mqttClient.state());
+            Serial.println(" retrying in 5s");
+            delay(5000);
+        }
+    }
 }
 
-void connectMQTT() {
-  while (!mqttClient.connected()) {
-    Serial.print("Connecting to MQTT... ");
-
-    if (mqttClient.connect("ESP32Client", MQTT_USER, MQTT_PASS)) {
-      Serial.println("connected");
+void publishData(String message) {
+    if (mqttClient.publish(MQTT_TOPIC, message.c_str())) {
+        Serial.println("Published: " + message);
     } else {
-      Serial.print("failed, rc=");
-      Serial.print(mqttClient.state());
-      Serial.println(" retrying in 5s");
-      delay(5000);
+        Serial.println("Failed to publish message");
     }
-  }
+}
+
+void sendHeartbeat() {
+    unsigned long currentMillis = millis();
+    if (currentMillis - lastHeartbeatTime >= HEARTBEAT_INTERVAL) {
+        lastHeartbeatTime = currentMillis;
+        String message = "Heartbeat, time: " + String(currentMillis / 1000);
+        publishData(message);
+    }
+}
+
+
+void scaleLoop(int i) {
+    float weight;
+    unsigned long currentMillis;
+    unsigned long emptyTime;
+    switch (p_states[i]) {
+        case DISABLE:
+            weight = scales[i].get_units(5);
+            if (weight > WEIGHT_THRESHOLD) {
+                p_states[i] = IDLE;
+                Serial.printf("Activate, Platform %d", i);
+            }
+            break;
+        case IDLE:
+            weight = scales[i].get_units(10);
+            if (weight < WEIGHT_THRESHOLD) {
+                p_states[i] = EMPTY;
+                emptyStartTime[i] = millis();
+                Serial.printf("Put up, Platform %d", i);
+                publishData("p" + String(i));
+            }
+            break;
+        case EMPTY:
+            weight = scales[i].get_units(5);
+            if (weight > WEIGHT_THRESHOLD) {
+                p_states[i] = IDLE;
+                Serial.printf("Put back, Platform %d", i);
+            } else {
+                currentMillis = millis();
+                emptyTime = currentMillis - emptyStartTime[i];
+                if (emptyTime >= EMPTY_WARN_TIME_THRESHOLD) {
+                    if (currentMillis - lastEmptyWarnTime[i] >= EMPTY_WARN_TIME_THRESHOLD) {
+                        Serial.printf("Warning, Platform %d is empty for %lu seconds", i, emptyTime / 1000);
+                        publishData("w" + String(i));
+                    }
+                    if (emptyTime > EMPTY_TIME_MAX) {
+                        p_states[i] = DISABLE;
+                        Serial.printf("Disable, Platform %d", i);
+                        publishData("d" + String(i));
+                    }
+                }
+            }
+            break;
+    }
 }
 
 void setup() {
-  Serial.begin(115200);
+    Serial.begin(115200);
+    delay(1000);
 
-  connectWiFi();
+    WiFiManager wifiManager;
+    if (!wifiManager.autoConnect("ESP32_AP_Pill")) {
+        Serial.println("Failed to connect or configure WiFi, restarting...");
+        delay(3000);
+        ESP.restart();
+    }
+    Serial.println("WiFi connected: " + WiFi.localIP().toString());
 
-  secureClient.setCACert(ROOT_CA);   // 🔐 TLS trust
+    // TLS and MQTT
+    secureClient.setCACert(ROOT_CA);
+    mqttClient.setServer(MQTT_HOST, MQTT_PORT);
+    connectMQTT();
 
-  mqttClient.setServer(MQTT_HOST, MQTT_PORT);
-
-  connectMQTT();
-
-  // Publish once (same as mosquitto_pub)
-  mqttClient.publish(MQTT_TOPIC, "hello mqtt over tls");
-  Serial.println("Message published");
+    // scale initialization
+    Serial.println("Initializing scales...");
+    scales[0].begin(LOADCELL_1_DOUT_PIN, LOADCELL_1_SCK_PIN);
+    scales[1].begin(LOADCELL_2_DOUT_PIN, LOADCELL_2_SCK_PIN);
+    delay(2000);
+    for (int i = 0; i < 2; i++) {
+        scales[i].set_scale(1.0);
+        scales[i].tare();
+        p_states[0] = DISABLE;
+    }
+    Serial.println("Initialized scales");
 }
 
 void loop() {
-  mqttClient.loop();
+    if (!mqttClient.connected()) {
+        connectMQTT();
+    }
+    mqttClient.loop();
+    sendHeartbeat();
+    scaleLoop(0);
+    scaleLoop(1);
 }
