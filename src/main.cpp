@@ -11,7 +11,7 @@ const char *MQTT_USER = "user1";
 const char *MQTT_PASS = "Pass1234";
 
 /* MQTT topic */
-const char *MQTT_TOPIC = "test/topic";
+const char *MQTT_TOPIC = "esp32/pill_box/status";
 
 /* Root CA certificate */
 const char *ROOT_CA = R"EOF(
@@ -41,7 +41,7 @@ MrY=
 
 /* Heartbeat time */
 unsigned long lastHeartbeatTime = 0;
-constexpr unsigned long HEARTBEAT_INTERVAL = 10000;
+constexpr unsigned long HEARTBEAT_INTERVAL = 2000;
 
 /* Platforms */
 typedef enum {
@@ -53,18 +53,18 @@ typedef enum {
 PlatformState p_states[2];
 HX711 scales[2];
 
-constexpr int LOADCELL_1_DOUT_PIN = 12;
-constexpr int LOADCELL_1_SCK_PIN = 14;
+constexpr int LOADCELL_1_DOUT_PIN = 23;
+constexpr int LOADCELL_1_SCK_PIN = 22;
 
 constexpr int LOADCELL_2_DOUT_PIN = 27;
 constexpr int LOADCELL_2_SCK_PIN = 26;
 
 unsigned long emptyStartTime[2];
 unsigned long lastEmptyWarnTime[2];
-constexpr unsigned long EMPTY_WARN_TIME_THRESHOLD = 20;
-constexpr unsigned long EMPTY_TIME_MAX = 100;
+constexpr unsigned long EMPTY_WARN_TIME_THRESHOLD = 30000;
+constexpr unsigned long EMPTY_TIME_MAX = 80000;
 
-constexpr float WEIGHT_THRESHOLD = 50.0;
+constexpr float WEIGHT_THRESHOLD = 7000.0;
 constexpr unsigned long READ_INTERVALS = 100;
 
 WiFiClientSecure secureClient;
@@ -96,51 +96,47 @@ void publishData(String message) {
 void sendHeartbeat() {
     unsigned long currentMillis = millis();
     if (currentMillis - lastHeartbeatTime >= HEARTBEAT_INTERVAL) {
+        Serial.printf("Heartbeat, s0: %f, s1: %f\n", scales[0].get_units(5), scales[1].get_units(5));
         lastHeartbeatTime = currentMillis;
-        String message = "Heartbeat, time: " + String(currentMillis / 1000);
-        publishData(message);
     }
 }
 
 
 void scaleLoop(int i) {
-    float weight;
-    unsigned long currentMillis;
-    unsigned long emptyTime;
+    float weight = scales[i].get_units(5);
     switch (p_states[i]) {
         case DISABLE:
-            weight = scales[i].get_units(5);
             if (weight > WEIGHT_THRESHOLD) {
                 p_states[i] = IDLE;
-                Serial.printf("Activate, Platform %d", i);
+                Serial.printf("Enable, Platform %d\n", i);
+                publishData("ACTIVE:" + String(i));
             }
             break;
         case IDLE:
-            weight = scales[i].get_units(10);
             if (weight < WEIGHT_THRESHOLD) {
                 p_states[i] = EMPTY;
                 emptyStartTime[i] = millis();
-                Serial.printf("Put up, Platform %d", i);
-                publishData("p" + String(i));
+                Serial.printf("Pick up, Platform %d\n", i);
+                publishData("PICKUP:" + String(i));
             }
             break;
         case EMPTY:
-            weight = scales[i].get_units(5);
             if (weight > WEIGHT_THRESHOLD) {
                 p_states[i] = IDLE;
-                Serial.printf("Put back, Platform %d", i);
+                Serial.printf("Put back, Platform %d\n", i);
             } else {
-                currentMillis = millis();
-                emptyTime = currentMillis - emptyStartTime[i];
+                unsigned long currentMillis = millis();
+                unsigned long emptyTime = currentMillis - emptyStartTime[i];
                 if (emptyTime >= EMPTY_WARN_TIME_THRESHOLD) {
                     if (currentMillis - lastEmptyWarnTime[i] >= EMPTY_WARN_TIME_THRESHOLD) {
+                        lastEmptyWarnTime[i] = currentMillis;
                         Serial.printf("Warning, Platform %d is empty for %lu seconds", i, emptyTime / 1000);
-                        publishData("w" + String(i));
+                        publishData("WARN:" + String(i));
                     }
                     if (emptyTime > EMPTY_TIME_MAX) {
                         p_states[i] = DISABLE;
                         Serial.printf("Disable, Platform %d", i);
-                        publishData("d" + String(i));
+                        publishData("DEACTIVE:" + String(i));
                     }
                 }
             }
@@ -176,6 +172,7 @@ void setup() {
         p_states[0] = DISABLE;
     }
     Serial.println("Initialized scales");
+    publishData("INITIALIZED");
 }
 
 void loop() {

@@ -14,5 +14,5 @@ mosquitto_sub \
   --cafile ~/mqtt-test/emqxsl-ca.crt \
   -u "user1" \
   -P "Pass1234" \
-  -t test/topic \
+  -t esp32/pill_box/status \
   -v
