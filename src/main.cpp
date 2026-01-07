@@ -64,7 +64,7 @@ unsigned long lastEmptyWarnTime[2];
 constexpr unsigned long EMPTY_WARN_TIME_THRESHOLD = 30000;
 constexpr unsigned long EMPTY_TIME_MAX = 80000;
 
-constexpr float WEIGHT_THRESHOLD = 7000.0;
+constexpr float WEIGHT_THRESHOLD = 4000.0;
 constexpr unsigned long READ_INTERVALS = 100;
 
 WiFiClientSecure secureClient;
